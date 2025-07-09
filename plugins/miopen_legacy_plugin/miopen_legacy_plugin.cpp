@@ -126,7 +126,7 @@ hipdnnPluginStatus_t hipdnnPluginRunEngine(unsigned engine_index,
     if(!input || !output || size == 0)
         return HIPDNN_PLUGIN_STATUS_BAD_PARAM;
 
-    return HIPDNN_PLUGIN_INTERNAL_ERROR;
+    return HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR;
 }
 ////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -227,7 +227,7 @@ hipdnnPluginStatus_t
             if(*num_engines == max_engines)
             {
                 *num_engines = applicable_engines.size();
-                HIPDNN_LOG_WARN("Maximum number of engines reached ({}), ignoring additional "
+                HIPDNN_LOG_INFO("Maximum number of engines reached ({}), ignoring additional "
                                 "engines, num_engines count: {}",
                                 max_engines,
                                 *num_engines);
@@ -376,7 +376,7 @@ hipdnnPluginStatus_t
         return HIPDNN_PLUGIN_STATUS_BAD_PARAM;
 
     // TODO: Execute MIOpen operations using execution context and device buffers
-    return HIPDNN_PLUGIN_INTERNAL_ERROR;
+    return HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR;
 }
 
 } // extern "C"
