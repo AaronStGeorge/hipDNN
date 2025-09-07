@@ -91,7 +91,7 @@ protected:
         SKIP_IF_NO_DEVICES();
 
         // Uncomment if you want debug logging info.
-        // setenv("HIPDNN_LOG_LEVEL", "info", 1);
+        setenv("HIPDNN_LOG_LEVEL", "info", 1);
 
         // Initialize HIP
         ASSERT_EQ(hipInit(0), hipSuccess);

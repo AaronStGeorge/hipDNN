@@ -22,7 +22,7 @@ int64_t MiopenEngine::id() const
 bool MiopenEngine::isApplicable(const hipdnn_plugin::IGraph& opGraph) const
 {
     // This is wrong if we ever have more than 1 plan builder thats applicable.
-    // If this is the case, we should split plan builders accross multiple engines.
+    // If this is the case, we should split plan builders across multiple engines.
     for(const auto& planBuilder : _planBuilders)
     {
         if(planBuilder->isApplicable(opGraph))

@@ -130,10 +130,18 @@ public:
     static hipdnnPluginStatus_t
         enginePluginGetAllEngineIds(int64_t* engineIds, uint32_t maxEngines, uint32_t* numEngines)
     {
-        LOG_API_ENTRY("engineIds={:p}, maxEngines={}, numEngines={:p}",
-                      static_cast<void*>(engineIds),
-                      maxEngines,
-                      static_cast<void*>(numEngines));
+        do
+        {
+            if(auto logger = spdlog ::get("test_good_default_plugin"))
+            {
+                logger->info("API called: [{}] "
+                             "engineIds={:p}, maxEngines={}, numEngines={:p}",
+                             __func__,
+                             static_cast<void*>(engineIds),
+                             maxEngines,
+                             static_cast<void*>(numEngines));
+            }
+        } while(0);
 
         return hipdnn_plugin::tryCatch([&, apiName = __func__]() {
             if(maxEngines != 0)

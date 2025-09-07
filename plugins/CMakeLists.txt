@@ -5,3 +5,5 @@
 option(BUILD_PLUGIN_AS_DEPENDENCY "Flag to build the plugins as part of the main hipdnn build" ON)
 
 add_subdirectory(miopen_legacy_plugin)
+add_subdirectory(iree_plugin)
+add_subdirectory(binary_add_plugin)
