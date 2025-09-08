@@ -48,44 +48,37 @@ int main(int argc, char* argv[])
     int64_t r = 1;
     int64_t s = 1;
 
+    
+    FusilliHandle handle = FUSILLI_UNWRAP(FusilliHandle::create(Backend::CPU));
     auto graph = std::make_shared<Graph>();
-    graph->setBackend(Backend::GFX942);
 
     graph->setName("fprop_sample");
     graph->setIODataType(DataType::Float).setComputeDataType(DataType::Float);
 
-    auto x_tensor = graph->tensor(
+    auto xTensor = graph->tensor(
         TensorAttr().setName("image").setDim({n, c, h, w}).setStride({c * h * w, h * w, w, 1}));
 
-    auto w_tensor = graph->tensor(
+    auto wTensor = graph->tensor(
         TensorAttr().setName("filter").setDim({k, c, r, s}).setStride({c * r * s, r * s, s, 1}));
 
-    auto conv_attr
+    auto convAttr
         = ConvFPropAttr().setPadding({0, 0}).setStride({1, 1}).setDilation({1, 1}).setName(
             "conv_fprop");
 
-    auto y_tensor = graph->convFProp(x_tensor, w_tensor, conv_attr);
+    auto yTensor = graph->convFProp(xTensor, wTensor, convAttr);
 
     // Specify Y's dimensions and strides
-    y_tensor->setDim({n, k, h, w}).setStride({k * h * w, h * w, w, 1});
-    y_tensor->setOutput(true);
+    yTensor->setDim({n, k, h, w}).setStride({k * h * w, h * w, w, 1});
+    yTensor->setOutput(true);
 
     FUSILLI_REQUIRE(graph->validate());
 
-    std::filesystem::path vmfb = FUSILLI_UNWRAP(graph->readOrGenerateCompiledArtifact(FUSILLI_UNWRAP(graph->emitAsm())));
 
-    // Dump contents of the compiled artifact file
-    std::cout << "\nCompiled artifact path: " << vmfb << "\n";
-    std::cout << "Contents of compiled artifact:\n";
-    std::cout << "==============================\n";
-    std::ifstream file(vmfb, std::ios::binary);
-    if (file.is_open()) {
-        std::cout << file.rdbuf();
-        file.close();
-    } else {
-        std::cerr << "Failed to open file: " << vmfb << "\n";
-    }
-    std::cout << "\n==============================\n";
+    FUSILLI_REQUIRE(graph->validate());
+
+    FUSILLI_REQUIRE(graph->compile(handle, /*remove=*/true));
+
+    std::cout << "proof of life: hipDNN -> fusilli -> iree connection" << "\n";
 
     return 0;
 }

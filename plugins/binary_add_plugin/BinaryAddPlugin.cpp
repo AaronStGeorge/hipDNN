@@ -61,13 +61,14 @@ private:
         _engineDetailsBuffers;
 };
 
-struct IREEPlan {
+struct IREEPlan
+{
     void execute(const HipdnnEnginePluginHandle& handle,
-                                        const hipdnnPluginDeviceBuffer_t* deviceBuffers,
-                                        uint32_t numDeviceBuffers,
-                                        void* workspace) {
-
-                                        }
+                 const hipdnnPluginDeviceBuffer_t* deviceBuffers,
+                 uint32_t numDeviceBuffers,
+                 void* workspace)
+    {
+    }
 };
 
 struct HipdnnEnginePluginExecutionContext
@@ -95,6 +96,7 @@ hipdnnPluginStatus_t hipdnnPluginGetType(hipdnnPluginType_t* type)
     return HIPDNN_PLUGIN_STATUS_SUCCESS;
 }
 
+// NOLINTNEXTLINE
 void hipdnnPluginGetLastErrorString(const char** error_str)
 {
 
@@ -134,17 +136,15 @@ hipdnnPluginStatus_t
         }
         hipdnn_plugin::throwIfNull(numEngines);
 
+        // Set `numEngines` regardless of how many engines are actually returned.
+        // The backend queries this function twice:
+        // - First pass: engineIds=NULL, maxEngines=0 to get the count
+        // - Second pass: engineIds allocated based on numEngines from first pass
+        *numEngines = 1;
+
         if(maxEngines >= 1)
         {
-            *engineIds = ENGINE_ID;
-            *numEngines = 1;
-        }
-        else
-        {
-            HIPDNN_LOG_INFO("Maximum number of engines reached ({}), ignoring additional "
-                            "engines, numEngines count: {}",
-                            maxEngines,
-                            *numEngines);
+            engineIds[0] = ENGINE_ID;
         }
 
         LOG_API_SUCCESS(apiName, "numEngines={}", *numEngines);
@@ -335,9 +335,10 @@ hipdnnPluginStatus_t
 
         hipdnn_plugin::EngineConfigWrapper engineConfigWrapper(engineConfig->ptr,
                                                                engineConfig->size);
-        if (engineConfigWrapper.engineId() != ENGINE_ID) {
+        if(engineConfigWrapper.engineId() != ENGINE_ID)
+        {
             throw hipdnn_plugin::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INVALID_VALUE,
-                                        "unexpected engine id");
+                                                       "unexpected engine id");
         }
 
         hipdnn_plugin::GraphWrapper opGraphWrapper(opGraph->ptr, opGraph->size);
