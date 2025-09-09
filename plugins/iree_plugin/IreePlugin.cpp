@@ -4,6 +4,9 @@
 #include "hipdnn_sdk/plugin/PluginFlatbufferTypeHelpers.hpp"
 #include "hipdnn_sdk/plugin/PluginHelpers.hpp"
 #include <flatbuffers/flatbuffers.h>
+#include <fusilli/backend/backend.h>
+#include <fusilli/graph/graph.h>
+#include <fusilli/support/logging.h>
 #include <hip/hip_runtime.h>
 #include <hipdnn_sdk/data_objects/engine_details_generated.h>
 #include <hipdnn_sdk/plugin/PluginApi.h>
@@ -18,11 +21,33 @@
 #include <tuple>
 #include <unordered_map>
 
+#include "fusilli.h"
+
 static const char* pluginName = "relu_plugin";
 static const char* pluginVersion = "0.0.1";
 static const int64_t ENGINE_ID = 1000;
 
-extern "C" void launchRelu(float* output, const float* input, size_t size, hipStream_t stream);
+#define UNWRAP_FUSILLI_ERROROR(expr)                                                               \
+    ({                                                                                             \
+        auto errorOr = (expr);                                                                     \
+        if(isError(errorOr))                                                                       \
+        {                                                                                          \
+            throw hipdnn_plugin ::HipdnnPluginException(                                           \
+                HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR, fusilli ::ErrorObject(errorOr).getMessage()); \
+        }                                                                                          \
+        std ::move(*errorOr);                                                                      \
+    });
+
+#define FUSILLI_REQUIRE(expr)                                                                \
+    do                                                                                       \
+    {                                                                                        \
+        fusilli::ErrorObject err = (expr);                                                   \
+        if(isError(err))                                                                     \
+        {                                                                                    \
+            throw hipdnn_plugin ::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR, \
+                                                        err.getMessage());                   \
+        }                                                                                    \
+    } while(false)
 
 // s_lastError is thread_local static so can't be initialized in the header file
 // as the header file is included in many context. Clear the string here.
@@ -83,34 +108,11 @@ private:
         _engineDetailsBuffers;
 };
 
-struct Plan
-{
-    std::unordered_map<int64_t, const hipdnn_sdk::data_objects::TensorAttributes*> tensorMap;
-    int64_t x;
-    int64_t y;
-    hipStream_t stream;
-
-    void execute(const HipdnnEnginePluginHandle& handle,
-                 const hipdnnPluginDeviceBuffer_t* deviceBuffers,
-                 uint32_t numDeviceBuffers,
-                 void* workspace)
-    {
-        std::ignore = workspace;
-
-        auto xBuffer = findDeviceBuffer(x, deviceBuffers, numDeviceBuffers);
-        auto yBuffer = findDeviceBuffer(y, deviceBuffers, numDeviceBuffers);
-
-        auto dims = tensorMap[x]->dims();
-        size_t size = std::accumulate(dims->begin(), dims->end(), 1UL, std::multiplies<size_t>());
-
-        launchRelu(
-            static_cast<float*>(yBuffer.ptr), static_cast<float*>(xBuffer.ptr), size, stream);
-    }
-};
-
 struct HipdnnEnginePluginExecutionContext
 {
-    Plan plan;
+	fusilli::Graph graph;
+
+	// TODO: need info to map hipDNN varentpack to fusilli varentpack
 };
 
 extern "C" {
@@ -377,36 +379,54 @@ hipdnnPluginStatus_t
             throw hipdnn_plugin::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INVALID_VALUE,
                                                        "unexpected engine id");
         }
-
         hipdnn_plugin::GraphWrapper opGraphWrapper(opGraph->ptr, opGraph->size);
 
-        const auto& node = opGraphWrapper.getNode(0);
-        std::string nodeName = getNodeName(node);
-        int64_t x;
-        int64_t y;
+        // ===============================================================
+        int64_t n = 16;
+        int64_t c = 128;
+        int64_t h = 64;
+        int64_t w = 64;
+        int64_t k = 256;
+        int64_t r = 1;
+        int64_t s = 1;
 
-        switch(node.attributes_type())
-        {
-        case hipdnn_sdk::data_objects::NodeAttributes_PointwiseAttributes:
-            x = node.attributes_as_PointwiseAttributes()->in_0_tensor_uid();
-            y = node.attributes_as_PointwiseAttributes()->out_0_tensor_uid();
-            break;
-        default:
-            throw hipdnn_plugin::HipdnnPluginException(
-                HIPDNN_PLUGIN_STATUS_BAD_PARAM,
-                "Unsupported node type for batchnorm plan builder: "
-                    + std::string(hipdnn_sdk::data_objects::toString(node.attributes_type())));
-        }
+        fusilli::FusilliHandle handle
+            = UNWRAP_FUSILLI_ERROROR(fusilli::FusilliHandle::create(fusilli::Backend::GFX942));
+        fusilli::Graph graph = fusilli::Graph();
 
-        auto context = new HipdnnEnginePluginExecutionContext{
-            .plan = {
-                .tensorMap = opGraphWrapper.getTensorMap(),
-                .x = x,
-                .y = y,
-                .stream = handle->getStream(),
-            },
-        };
-        *executionContext = context;
+        graph.setName("fprop_sample");
+        graph.setIODataType(fusilli::DataType::Float).setComputeDataType(fusilli::DataType::Float);
+
+        auto xTensor = graph.tensor(fusilli::TensorAttr()
+                                        .setName("image")
+                                        .setDim({n, c, h, w})
+                                        .setStride({c * h * w, h * w, w, 1}));
+
+        auto wTensor = graph.tensor(fusilli::TensorAttr()
+                                        .setName("filter")
+                                        .setDim({k, c, r, s})
+                                        .setStride({c * r * s, r * s, s, 1}));
+
+        auto convAttr = fusilli::ConvFPropAttr()
+                            .setPadding({0, 0})
+                            .setStride({1, 1})
+                            .setDilation({1, 1})
+                            .setName("conv_fprop");
+
+        auto yTensor = graph.convFProp(xTensor, wTensor, convAttr);
+
+        // Specify Y's dimensions and strides
+        yTensor->setDim({n, k, h, w}).setStride({k * h * w, h * w, w, 1});
+        yTensor->setOutput(true);
+
+        FUSILLI_REQUIRE(graph.validate());
+
+        FUSILLI_REQUIRE(graph.validate());
+
+        FUSILLI_REQUIRE(graph.compile(handle, /*remove=*/true));
+        // ===============================================================
+
+        *executionContext = new HipdnnEnginePluginExecutionContext{.graph = std::move(graph)};
 
         LOG_API_SUCCESS(
             apiName, "created_execution_context={:p}", static_cast<void*>(*executionContext));
@@ -451,7 +471,8 @@ hipdnnPluginStatus_t
         hipdnn_plugin::throwIfNull(executionContext);
         hipdnn_plugin::throwIfNull(deviceBuffers);
 
-        executionContext->plan.execute(*handle, deviceBuffers, numDeviceBuffers, workspace);
+            throw hipdnn_plugin ::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR, "TACO!"); 
+
 
         LOG_API_SUCCESS(apiName, "executed graph");
     });
