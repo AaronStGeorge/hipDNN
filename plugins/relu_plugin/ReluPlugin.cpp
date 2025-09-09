@@ -18,7 +18,7 @@
 #include <tuple>
 #include <unordered_map>
 
-static const char* pluginName = "binary_add_plugin";
+static const char* pluginName = "relu_plugin";
 static const char* pluginVersion = "0.0.1";
 static const int64_t ENGINE_ID = 1000;
 

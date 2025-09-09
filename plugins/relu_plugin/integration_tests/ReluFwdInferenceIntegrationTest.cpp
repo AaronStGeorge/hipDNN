@@ -116,7 +116,7 @@ protected:
         return variantPack;
     }
 
-    void runMiopenBatchnormFwd(
+    void runReluFwd(
         ReluTensorBundle& graphTensorBundle,
         DataType_t inputDataType)
     {
@@ -169,7 +169,7 @@ protected:
         ASSERT_EQ(result.code, error_code_t::OK) << result.err_msg;
     }
 
-    static void runCpuBatchnormFwd(ReluTensorBundle& cpuTensorBundle)
+    static void runCpuReluFwd(ReluTensorBundle& cpuTensorBundle)
     {
         auto* input = cpuTensorBundle.xTensor.memory().hostData();
         auto* output = cpuTensorBundle.yTensor.memory().hostData();
@@ -195,11 +195,11 @@ protected:
         ReluTensorBundle cpuTensorBundle(
             testCase.getDims(), seed);
 
-        runMiopenBatchnormFwd(
+        runReluFwd(
             graphTensorBundle, inputDataType);
         graphTensorBundle.yTensor.memory().markDeviceModified();
 
-        runCpuBatchnormFwd(cpuTensorBundle);
+        runCpuReluFwd(cpuTensorBundle);
 
         CpuFpReferenceValidation<float> cpuRefValidation(tolerance, tolerance);
         EXPECT_TRUE(cpuRefValidation.allClose(cpuTensorBundle.yTensor.memory(),
