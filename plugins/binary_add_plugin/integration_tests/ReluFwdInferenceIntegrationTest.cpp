@@ -143,6 +143,8 @@ protected:
 
         yTensorAttr->set_data_type(inputDataType);
 
+        yTensorAttr->set_output(true);
+
         // Validate and build graph
         auto result = graph->validate();
         ASSERT_EQ(result.code, error_code_t::OK) << result.err_msg;
@@ -169,7 +171,13 @@ protected:
 
     static void runCpuBatchnormFwd(ReluTensorBundle& cpuTensorBundle)
     {
-        (void)cpuTensorBundle;
+        auto* input = cpuTensorBundle.xTensor.memory().hostData();
+        auto* output = cpuTensorBundle.yTensor.memory().hostData();
+        size_t size = cpuTensorBundle.xTensor.memory().count();
+
+        for (size_t i = 0; i < size; i++) {
+            output[i] = std::fmax(0.0f, input[i]);
+        }
     }
 
     void runReluTest(const Relu2dTestCase& testCase,
@@ -211,6 +219,8 @@ std::vector<Relu2dTestCase> getReluFwdInferenceTestCases()
 {
     return {
         {.n = 64, .m = 64},
+        {.n = 64, .m = 128},
+        {.n = 128, .m = 64},
     };
 }
 

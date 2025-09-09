@@ -8,13 +8,23 @@ enable_language(HIP)
 find_package(hip REQUIRED)
 
 
-# set_source_files_properties(BinaryAddPlugin.cpp PROPERTIES LANGUAGE HIP)
+
+set_source_files_properties(reluKernel.cpp PROPERTIES LANGUAGE HIP)
+
+add_library(relu_kernel
+    reluKernel.cpp
+)
+target_link_libraries(relu_kernel
+    PRIVATE
+        hip::host
+        hip::device
+    )
 
 add_library(binary_add_plugin SHARED
     BinaryAddPlugin.cpp
 )
 target_link_libraries(binary_add_plugin PUBLIC hipdnn_sdk hip::host)
-target_link_libraries(binary_add_plugin PRIVATE hip::host)
+target_link_libraries(binary_add_plugin PRIVATE hip::host relu_kernel)
 target_compile_definitions(binary_add_plugin PRIVATE
     COMPONENT_NAME="binary_add_plugin"
 )

@@ -1,8 +1,8 @@
 #include "hipdnn_sdk/data_objects/graph_generated.h"
+#include "hipdnn_sdk/data_objects/tensor_attributes_generated.h"
 #include "hipdnn_sdk/plugin/PluginApiDataTypes.h"
 #include "hipdnn_sdk/plugin/PluginFlatbufferTypeHelpers.hpp"
 #include "hipdnn_sdk/plugin/PluginHelpers.hpp"
-#include <cstdint>
 #include <flatbuffers/flatbuffers.h>
 #include <hip/hip_runtime.h>
 #include <hipdnn_sdk/data_objects/engine_details_generated.h>
@@ -10,14 +10,19 @@
 #include <hipdnn_sdk/plugin/flatbuffer_utilities/EngineConfigWrapper.hpp>
 #include <hipdnn_sdk/plugin/flatbuffer_utilities/GraphWrapper.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
+#include <numeric>
+#include <tuple>
 #include <unordered_map>
-#include <vector>
 
 static const char* pluginName = "binary_add_plugin";
 static const char* pluginVersion = "0.0.1";
 static const int64_t ENGINE_ID = 1000;
+
+extern "C" void launchRelu(float* output, const float* input, size_t size, hipStream_t stream);
 
 // s_lastError is thread_local static so can't be initialized in the header file
 // as the header file is included in many context. Clear the string here.
@@ -29,6 +34,23 @@ thread_local char
 std::string getNodeName(const hipdnn_sdk::data_objects::Node& node)
 {
     return node.name() != nullptr ? node.name()->str() : "";
+}
+
+hipdnnPluginDeviceBuffer_t findDeviceBuffer(int64_t uid,
+                                            const hipdnnPluginDeviceBuffer_t* deviceBuffers,
+                                            uint32_t numDeviceBuffers)
+{
+    for(uint32_t i = 0; i < numDeviceBuffers; i++)
+    {
+        if(uid == deviceBuffers[i].uid)
+        {
+            return deviceBuffers[i];
+        }
+    }
+
+    throw hipdnn_plugin::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INVALID_VALUE,
+                                               "Device buffer with the uid: " + std::to_string(uid)
+                                                   + " not found in the provided device buffers.");
 }
 
 struct HipdnnEnginePluginHandle
@@ -61,19 +83,34 @@ private:
         _engineDetailsBuffers;
 };
 
-struct IREEPlan
+struct RELUPlan
 {
+    std::unordered_map<int64_t, const hipdnn_sdk::data_objects::TensorAttributes*> tensorMap;
+    int64_t x;
+    int64_t y;
+    hipStream_t stream;
+
     void execute(const HipdnnEnginePluginHandle& handle,
                  const hipdnnPluginDeviceBuffer_t* deviceBuffers,
                  uint32_t numDeviceBuffers,
                  void* workspace)
     {
+        std::ignore = workspace;
+
+        auto xBuffer = findDeviceBuffer(x, deviceBuffers, numDeviceBuffers);
+        auto yBuffer = findDeviceBuffer(y, deviceBuffers, numDeviceBuffers);
+
+        auto dims = tensorMap[x]->dims();
+        size_t size = std::accumulate(dims->begin(), dims->end(), 1UL, std::multiplies<size_t>());
+
+        launchRelu(
+            static_cast<float*>(yBuffer.ptr), static_cast<float*>(xBuffer.ptr), size, stream);
     }
 };
 
 struct HipdnnEnginePluginExecutionContext
 {
-    IREEPlan plan;
+    RELUPlan plan;
 };
 
 extern "C" {
@@ -345,11 +382,14 @@ hipdnnPluginStatus_t
 
         const auto& node = opGraphWrapper.getNode(0);
         std::string nodeName = getNodeName(node);
+        int64_t x;
+        int64_t y;
 
         switch(node.attributes_type())
         {
         case hipdnn_sdk::data_objects::NodeAttributes_PointwiseAttributes:
-            HIPDNN_LOG_INFO("Building something, I hope: {}", nodeName);
+            x = node.attributes_as_PointwiseAttributes()->in_0_tensor_uid();
+            y = node.attributes_as_PointwiseAttributes()->out_0_tensor_uid();
             break;
         default:
             throw hipdnn_plugin::HipdnnPluginException(
@@ -358,7 +398,14 @@ hipdnnPluginStatus_t
                     + std::string(hipdnn_sdk::data_objects::toString(node.attributes_type())));
         }
 
-        auto context = new HipdnnEnginePluginExecutionContext;
+        auto context = new HipdnnEnginePluginExecutionContext{
+            .plan = {
+                .tensorMap = opGraphWrapper.getTensorMap(),
+                .x = x,
+                .y = y,
+                .stream = handle->getStream(),
+            },
+        };
         *executionContext = context;
 
         LOG_API_SUCCESS(
@@ -404,7 +451,7 @@ hipdnnPluginStatus_t
         hipdnn_plugin::throwIfNull(executionContext);
         hipdnn_plugin::throwIfNull(deviceBuffers);
 
-        throw hipdnn_plugin::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR, "TACO!");
+        executionContext->plan.execute(*handle, deviceBuffers, numDeviceBuffers, workspace);
 
         LOG_API_SUCCESS(apiName, "executed graph");
     });
