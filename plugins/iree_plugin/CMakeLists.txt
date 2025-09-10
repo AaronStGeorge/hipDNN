@@ -27,4 +27,4 @@ target_compile_definitions(iree_plugin PRIVATE
 # used in tests
 set(IREE_PLUGIN_DIR ${CMAKE_CURRENT_BINARY_DIR} CACHE INTERNAL "iree plugin dir" FORCE)
 
-# add_subdirectory(integration_tests)
+add_subdirectory(integration_tests)

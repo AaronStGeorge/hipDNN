@@ -23,9 +23,9 @@
 
 #include "fusilli.h"
 
-static const char* pluginName = "relu_plugin";
+static const char* pluginName = "iree_plugin";
 static const char* pluginVersion = "0.0.1";
-static const int64_t ENGINE_ID = 1000;
+static const int64_t ENGINE_ID = 1001;
 
 #define UNWRAP_FUSILLI_ERROROR(expr)                                                               \
     ({                                                                                             \
