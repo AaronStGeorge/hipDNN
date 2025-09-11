@@ -575,10 +575,9 @@ hipdnnPluginStatus_t
             };
 
             iree_hal_buffer_params_t bufferParams = {
+                .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
+                .access = IREE_HAL_MEMORY_ACCESS_READ | IREE_HAL_MEMORY_ACCESS_WRITE,
                 .type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL,
-                //NOLINTNEXTLINE
-                .usage = IREE_HAL_BUFFER_USAGE_TRANSFER |
-                        IREE_HAL_BUFFER_USAGE_DISPATCH_STORAGE,
             };
             iree_hal_allocator_t* deviceAllocator
                 = iree_hal_device_allocator(handle->fusilliHandle);
@@ -657,26 +656,9 @@ hipdnnPluginStatus_t
             // TODO: ensure outBufferView + importedBuffer are clenead up properly.
             variantPack[tensorAttr] = std::make_shared<fusilli::Buffer>(UNWRAP_FUSILLI_ERROROR(fusilli::Buffer::import(outBufferView)));
         }
-
         FUSILLI_REQUIRE(executionContext->graph.execute(variantPack));
-
-        iree_hal_buffer_view_t* output = *variantPack[executionContext->yTensor];
-
-         // Copy results back from device (this also works for CPUs).
-        iree_hal_buffer_t *buffer = iree_hal_buffer_view_buffer(output);
-        iree_device_size_t byteLength = iree_hal_buffer_view_byte_length(output);
-        std::vector<float> hostData(byteLength / sizeof(float));
-        FUSILLI_REQUIRE(iree_hal_device_transfer_d2h(
-            handle->fusilliHandle, buffer, 0, hostData.data(), byteLength,
-            IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT, iree_infinite_timeout()));
-
-        // Check the results.
-        for (int i = 0; i < 5 ; i++) {
-            std::cout << "TACOOOOO: " << hostData[i] << "\n";
-        }
 
         LOG_API_SUCCESS(apiName, "executed graph");
     });
 }
-
 } // extern "C"

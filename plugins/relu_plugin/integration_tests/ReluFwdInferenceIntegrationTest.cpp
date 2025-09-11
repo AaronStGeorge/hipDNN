@@ -63,7 +63,7 @@ struct ReluTensorBundle
 
 } // namespace
 
-class ReluForwardInferenceIntegrationTest
+class ConvFpropInferenceIntegrationTest
     : public ::testing::TestWithParam<Relu2dTestCase>
 {
 protected:
@@ -226,12 +226,12 @@ std::vector<Relu2dTestCase> getReluFwdInferenceTestCases()
 
 } // namespace
 
-TEST_P(ReluForwardInferenceIntegrationTest, RunFloatFwdBatchnormGraphNCHW)
+TEST_P(ConvFpropInferenceIntegrationTest, RunFloatFwdBatchnormGraphNCHW)
 {
     Relu2dTestCase testCase = GetParam();
     runReluTest(testCase, 1e-6f);
 }
 
 INSTANTIATE_TEST_SUITE_P(RunFloatFwdBatchnormGraph,
-                         ReluForwardInferenceIntegrationTest,
+                         ConvFpropInferenceIntegrationTest,
                          testing::ValuesIn(getReluFwdInferenceTestCases()));
