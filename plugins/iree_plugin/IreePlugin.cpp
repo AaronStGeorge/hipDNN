@@ -4,7 +4,10 @@
 #include "hipdnn_sdk/plugin/PluginFlatbufferTypeHelpers.hpp"
 #include "hipdnn_sdk/plugin/PluginHelpers.hpp"
 #include <flatbuffers/flatbuffers.h>
+#include <fusilli/attributes/tensor_attributes.h>
 #include <fusilli/backend/backend.h>
+#include <fusilli/backend/buffer.h>
+#include <fusilli/backend/handle.h>
 #include <fusilli/graph/graph.h>
 #include <fusilli/support/logging.h>
 #include <hip/hip_runtime.h>
@@ -13,13 +16,19 @@
 #include <hipdnn_sdk/plugin/flatbuffer_utilities/EngineConfigWrapper.hpp>
 #include <hipdnn_sdk/plugin/flatbuffer_utilities/GraphWrapper.hpp>
 
+ #include "iree/hal/drivers/hip/api.h"
+   #include "iree/hal/api.h"  // For general HAL types like iree_hal_device_t
+  #include "iree/base/api.h" // For base types like iree_status_t
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <numeric>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 
 #include "fusilli.h"
 
@@ -30,13 +39,13 @@ static const int64_t ENGINE_ID = 1001;
 #define UNWRAP_FUSILLI_ERROROR(expr)                                                               \
     ({                                                                                             \
         auto errorOr = (expr);                                                                     \
-        if(isError(errorOr))                                                                       \
+        if(fusilli::isError(errorOr))                                                                       \
         {                                                                                          \
             throw hipdnn_plugin ::HipdnnPluginException(                                           \
                 HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR, fusilli ::ErrorObject(errorOr).getMessage()); \
         }                                                                                          \
         std ::move(*errorOr);                                                                      \
-    });
+    })
 
 #define FUSILLI_REQUIRE(expr)                                                                \
     do                                                                                       \
@@ -81,6 +90,10 @@ hipdnnPluginDeviceBuffer_t findDeviceBuffer(int64_t uid,
 struct HipdnnEnginePluginHandle
 {
 public:
+    HipdnnEnginePluginHandle(fusilli::Handle&& handle)
+        : fusilliHandle(std::move(handle))
+    {
+    }
     void setStream(hipStream_t stream)
     {
         _stream = stream;
@@ -102,6 +115,8 @@ public:
         _engineDetailsBuffers.erase(ptr);
     }
 
+    fusilli::Handle fusilliHandle;
+
 private:
     hipStream_t _stream = nullptr;
     std::unordered_map<const void*, std::unique_ptr<flatbuffers::DetachedBuffer>>
@@ -110,9 +125,9 @@ private:
 
 struct HipdnnEnginePluginExecutionContext
 {
-	fusilli::Graph graph;
-
-	// TODO: need info to map hipDNN varentpack to fusilli varentpack
+    fusilli::Graph graph;
+    std::unordered_map<int64_t, std::shared_ptr<fusilli::TensorAttr>> uidToFusilliTensorAttr;
+    std::shared_ptr<fusilli::TensorAttr> yTensor;
 };
 
 extern "C" {
@@ -197,7 +212,9 @@ hipdnnPluginStatus_t hipdnnEnginePluginCreate(hipdnnEnginePluginHandle_t* handle
     return hipdnn_plugin::tryCatch([&, apiName = __func__]() {
         hipdnn_plugin::throwIfNull(handle);
 
-        *handle = new HipdnnEnginePluginHandle();
+        auto fusilliHandle
+            = UNWRAP_FUSILLI_ERROROR(fusilli::Handle::create(fusilli::Backend::GFX942));
+        *handle = new HipdnnEnginePluginHandle(std::move(fusilliHandle));
 
         LOG_API_SUCCESS(apiName, "createdHandle={:p}", static_cast<void*>(*handle));
     });
@@ -226,7 +243,33 @@ hipdnnPluginStatus_t hipdnnEnginePluginSetStream(hipdnnEnginePluginHandle_t hand
     return hipdnn_plugin::tryCatch([&, apiName = __func__]() {
         hipdnn_plugin::throwIfNull(handle);
 
-        handle->setStream(stream);
+        iree_hal_hip_device_params_t params;
+        iree_hal_hip_device_params_initialize(&params);
+
+        params.external_stream = (uint64_t)stream;
+
+        iree_hal_hip_driver_options_t driverOptions;
+        iree_hal_hip_driver_options_initialize(&driverOptions);
+
+        iree_hal_driver_t* driver;
+        FUSILLI_REQUIRE(iree_hal_hip_driver_create(
+            iree_make_cstring_view("hip"), 
+            &driverOptions,           
+            &params,                  
+            iree_allocator_system(),  
+            &driver));
+
+        iree_hal_device_t* device;
+        FUSILLI_REQUIRE(iree_hal_driver_create_device_by_id(
+            driver,
+            IREE_HAL_DEVICE_ID_DEFAULT,
+            0,
+            nullptr,
+            iree_allocator_system(),
+            &device));
+
+        handle->fusilliHandle.setDevice(device); // setDevice method hacked in locally 
+        handle->setStream(stream); // hacked in local metho
 
         LOG_API_SUCCESS(apiName, "");
     });
@@ -379,9 +422,12 @@ hipdnnPluginStatus_t
             throw hipdnn_plugin::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INVALID_VALUE,
                                                        "unexpected engine id");
         }
-        hipdnn_plugin::GraphWrapper opGraphWrapper(opGraph->ptr, opGraph->size);
 
-        // ===============================================================
+        // ----------------------------------------------------------------------
+        //  Fake graph for now, this should be a hipdnn graph -> fusilli graph
+        //  translation, but for now it's just manually stubbing the graph.
+        // ----------------------------------------------------------------------
+
         int64_t n = 16;
         int64_t c = 128;
         int64_t h = 64;
@@ -390,8 +436,6 @@ hipdnnPluginStatus_t
         int64_t r = 1;
         int64_t s = 1;
 
-        fusilli::FusilliHandle handle
-            = UNWRAP_FUSILLI_ERROROR(fusilli::FusilliHandle::create(fusilli::Backend::GFX942));
         fusilli::Graph graph = fusilli::Graph();
 
         graph.setName("fprop_sample");
@@ -413,7 +457,7 @@ hipdnnPluginStatus_t
                             .setDilation({1, 1})
                             .setName("conv_fprop");
 
-        auto yTensor = graph.convFProp(xTensor, wTensor, convAttr);
+        std::shared_ptr<fusilli::TensorAttr> yTensor = graph.convFProp(xTensor, wTensor, convAttr);
 
         // Specify Y's dimensions and strides
         yTensor->setDim({n, k, h, w}).setStride({k * h * w, h * w, w, 1});
@@ -423,10 +467,47 @@ hipdnnPluginStatus_t
 
         FUSILLI_REQUIRE(graph.validate());
 
-        FUSILLI_REQUIRE(graph.compile(handle, /*remove=*/true));
-        // ===============================================================
+        FUSILLI_REQUIRE(graph.compile(handle->fusilliHandle));
 
-        *executionContext = new HipdnnEnginePluginExecutionContext{.graph = std::move(graph)};
+        // ----------------------------------------------------------------------
+        // Create uid -> fusilli::Attribute map. In execute we'll be handed a
+        // variant pack (uid -> `void *` hip allocated ptr). To call into
+        // fusilli graph execute we need a fusilli variant pack
+        // (fusilli::Attribute -> iree_hal_buffer_view_t). Given this map here,
+        // we can map uid to fusilli::Attribute, and we can create an imported
+        // iree_hal_buffer_view_t given the ptr uid also maps to.
+        // ----------------------------------------------------------------------
+
+        hipdnn_plugin::GraphWrapper opGraphWrapper(opGraph->ptr, opGraph->size);
+
+        const auto& node = opGraphWrapper.getNode(0);
+        std::string nodeName = getNodeName(node);
+
+        if(node.attributes_type()
+           != hipdnn_sdk::data_objects::NodeAttributes_ConvolutionFwdAttributes)
+        {
+            throw hipdnn_plugin::HipdnnPluginException(
+                HIPDNN_PLUGIN_STATUS_BAD_PARAM,
+                "Unsupported node type for batchnorm plan builder: "
+                    + std::string(hipdnn_sdk::data_objects::toString(node.attributes_type())));
+        }
+
+        auto convAttrs = node.attributes_as_ConvolutionFwdAttributes();
+        int64_t xTensorUid = convAttrs->x_tensor_uid();
+        int64_t wTensorUid = convAttrs->w_tensor_uid();
+        int64_t yTensorUid = convAttrs->y_tensor_uid();
+
+        std::unordered_map<int64_t, std::shared_ptr<fusilli::TensorAttr>> uidToFusilliTensorAttr{
+            {xTensorUid, xTensor},
+            {wTensorUid, wTensor},
+            {yTensorUid, yTensor},
+        };
+
+        *executionContext = new HipdnnEnginePluginExecutionContext{
+            .graph = std::move(graph),
+            .uidToFusilliTensorAttr = std::move(uidToFusilliTensorAttr),
+            .yTensor = yTensor,
+        };
 
         LOG_API_SUCCESS(
             apiName, "created_execution_context={:p}", static_cast<void*>(*executionContext));
@@ -471,8 +552,128 @@ hipdnnPluginStatus_t
         hipdnn_plugin::throwIfNull(executionContext);
         hipdnn_plugin::throwIfNull(deviceBuffers);
 
-            throw hipdnn_plugin ::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR, "TACO!"); 
+        std::unordered_map<std::shared_ptr<fusilli::TensorAttr>,
+                               std::shared_ptr<fusilli::Buffer>>
+            variantPack;
 
+
+        for(auto& [uid, tensorAttr] : executionContext->uidToFusilliTensorAttr)
+        {
+            auto xBuffer = findDeviceBuffer(uid, deviceBuffers, numDeviceBuffers);
+
+            iree_hal_external_buffer_t externalBuffer = {
+                .type = IREE_HAL_EXTERNAL_BUFFER_TYPE_DEVICE_ALLOCATION,
+                .flags = 0,
+                .size = static_cast<iree_device_size_t>(sizeof(float) * tensorAttr->getVolume()),
+                .handle =
+                    {
+                        .device_allocation =
+                            {
+                                .ptr = (uint64_t)xBuffer.ptr,
+                            },
+                    },
+            };
+
+            iree_hal_buffer_params_t bufferParams = {
+                .type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL,
+                //NOLINTNEXTLINE
+                .usage = IREE_HAL_BUFFER_USAGE_TRANSFER |
+                        IREE_HAL_BUFFER_USAGE_DISPATCH_STORAGE,
+            };
+            iree_hal_allocator_t* deviceAllocator
+                = iree_hal_device_allocator(handle->fusilliHandle);
+            iree_hal_buffer_t* importedBuffer = nullptr;
+            iree_hal_buffer_release_callback_t releaseCallback
+                = iree_hal_buffer_release_callback_null();
+            auto status = iree_hal_allocator_import_buffer(
+                deviceAllocator, bufferParams, &externalBuffer, releaseCallback, &importedBuffer);
+            FUSILLI_REQUIRE(status);
+
+            auto shape = tensorAttr->getDim();
+
+            // Create backing shape data with the correct type using IREE allocator
+            std::vector<iree_hal_dim_t> ireeShape;
+            ireeShape.reserve(shape.size());
+            for(const auto& dim : shape)
+            {
+                ireeShape.push_back(static_cast<iree_hal_dim_t>(dim));
+            }
+
+            iree_host_size_t bvShapeRank = ireeShape.size();
+            const iree_hal_dim_t* bvShape = ireeShape.data();
+            iree_hal_element_type_t bvElementType;
+            switch(tensorAttr->getDataType())
+            {
+            case fusilli::DataType::Half:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_FLOAT_16;
+                break;
+            case fusilli::DataType::BFloat16:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_BFLOAT_16;
+                break;
+            case fusilli::DataType::Float:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_FLOAT_32;
+                break;
+            case fusilli::DataType::Double:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_FLOAT_64;
+                break;
+            case fusilli::DataType::Uint8:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_UINT_8;
+                break;
+            case fusilli::DataType::Int8:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_INT_8;
+                break;
+            case fusilli::DataType::Int16:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_INT_16;
+                break;
+            case fusilli::DataType::Int32:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_INT_32;
+                break;
+            case fusilli::DataType::Int64:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_INT_64;
+                break;
+            case fusilli::DataType::Boolean:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_BOOL_8;
+                break;
+            case fusilli::DataType::FP8E5M2:
+                bvElementType = IREE_HAL_ELEMENT_TYPE_FLOAT_8_E5M2;
+                break;
+            case fusilli::DataType::NotSet:
+            default:
+                throw hipdnn_plugin ::HipdnnPluginException(HIPDNN_PLUGIN_STATUS_INTERNAL_ERROR,
+                                                            "unknown data type");
+            }
+            iree_hal_encoding_type_t bvEncodingType = IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR;
+            iree_allocator_t ireeHoastAllocator = iree_allocator_system();
+            iree_hal_buffer_view_t* outBufferView = nullptr;
+
+            FUSILLI_REQUIRE(iree_hal_buffer_view_create(importedBuffer,
+                                                        bvShapeRank,
+                                                        bvShape,
+                                                        bvElementType,
+                                                        bvEncodingType,
+                                                        ireeHoastAllocator,
+                                                        &outBufferView));
+
+            // TODO: ensure outBufferView + importedBuffer are clenead up properly.
+            variantPack[tensorAttr] = std::make_shared<fusilli::Buffer>(UNWRAP_FUSILLI_ERROROR(fusilli::Buffer::import(outBufferView)));
+        }
+
+        FUSILLI_REQUIRE(executionContext->graph.execute(variantPack));
+
+        iree_hal_buffer_view_t* output = *variantPack[executionContext->yTensor];
+
+         // Copy results back from device (this also works for CPUs).
+        iree_hal_buffer_t *buffer = iree_hal_buffer_view_buffer(output);
+        iree_device_size_t byteLength = iree_hal_buffer_view_byte_length(output);
+        std::vector<float> hostData(byteLength / sizeof(float));
+        FUSILLI_REQUIRE(iree_hal_device_transfer_d2h(
+            handle->fusilliHandle, buffer, 0, hostData.data(), byteLength,
+            IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT, iree_infinite_timeout()));
+
+        // Check the results.
+        for (int i = 0; i < 5 ; i++) {
+            std::cout << "TACOOOOO: " << hostData[i] << "\n";
+        }
 
         LOG_API_SUCCESS(apiName, "executed graph");
     });

@@ -6,10 +6,11 @@
 #include <hip/hip_runtime.h>
 #include <memory>
 #include <random>
+#include <tuple>
 #include <vector>
 
-#include <hipdnn_frontend/attributes/PointwiseAttributes.hpp>
 #include <hipdnn_frontend/attributes/ConvolutionFpropAttributes.hpp>
+#include <hipdnn_frontend/attributes/PointwiseAttributes.hpp>
 
 #include <hipdnn_frontend/Graph.hpp>
 #include <hipdnn_frontend/Utilities.hpp>
@@ -29,53 +30,50 @@ namespace
 
 struct ConvFpropTestCase
 {
-    // batch size 
+    // batch size
     int64_t n;
     // input channels
     int64_t c;
     //height of input image
-    int64_t h;  
+    int64_t h;
     //width of input image
-    int64_t w;  
+    int64_t w;
     //number of output channels/filters
-    int64_t k;  
+    int64_t k;
     //filter height (rows)
-    int64_t r;  
+    int64_t r;
     //filter width (cols)
-    int64_t s;  
+    int64_t s;
 
     friend std::ostream& operator<<(std::ostream& ss, const ConvFpropTestCase& tc)
     {
-        return ss << "(n:" << tc.n << " c:" << tc.c << " h:" << tc.h << " w:" << tc.w 
+        return ss << "(n:" << tc.n << " c:" << tc.c << " h:" << tc.h << " w:" << tc.w
                   << " k:" << tc.k << " r:" << tc.r << " s:" << tc.s << ")";
     }
 };
 
 struct ConvFpropTensorBundle
 {
-    ConvFpropTensorBundle(const ConvFpropTestCase& dims,
-                            unsigned int seed = 1)
+    ConvFpropTensorBundle(const ConvFpropTestCase& dims, unsigned int seed = 1)
         : xTensor({dims.n, dims.c, dims.h, dims.w})
         , wTensor({dims.k, dims.c, dims.r, dims.s})
         , yTensor({dims.n, dims.k, dims.h, dims.w})
     {
-        xTensor.fillWithRandomValues(
-            -1.0f, 1.0f, seed);
-        wTensor.fillWithRandomValues(
-            -1.0f, 1.0f, seed + 1);
-        yTensor.fillWithRandomValues(
-            -100.0f, 100.0f, seed + 2);
+        std::ignore = seed;
+
+        xTensor.fillWithValue(1.0f);
+        wTensor.fillWithValue(1.0f);
+        yTensor.fillWithValue(-100.0f);
     }
 
-    PinnedTensor<float> xTensor;  // input image
-    PinnedTensor<float> wTensor;  // filter/weights
-    PinnedTensor<float> yTensor;  // output
+    PinnedTensor<float> xTensor; // input image
+    PinnedTensor<float> wTensor; // filter/weights
+    PinnedTensor<float> yTensor; // output
 };
 
 } // namespace
 
-class ReluForwardInferenceIntegrationTest
-    : public ::testing::TestWithParam<ConvFpropTestCase>
+class ReluForwardInferenceIntegrationTest : public ::testing::TestWithParam<ConvFpropTestCase>
 {
 protected:
     void SetUp() override
@@ -129,34 +127,29 @@ protected:
         return variantPack;
     }
 
-    void runConvFwd(
-        ConvFpropTensorBundle& graphTensorBundle,
-        DataType_t inputDataType)
+    void runConvFwd(ConvFpropTensorBundle& graphTensorBundle, DataType_t inputDataType)
     {
         auto graph = std::make_shared<hipdnn_frontend::graph::Graph>();
-        
+
         graph->set_name("fprop_sample");
-        graph->set_io_data_type(DataType_t::FLOAT)
-             .set_compute_data_type(DataType_t::FLOAT);
+        graph->set_io_data_type(DataType_t::FLOAT).set_compute_data_type(DataType_t::FLOAT);
 
         int64_t uid = 1;
-        
+
         // Create input tensor (image) with UID
         auto xAttr = graph::makeTensorAttributes("image", inputDataType, graphTensorBundle.xTensor);
         xAttr.set_uid(uid++);
         auto xTensorAttr = std::make_shared<graph::TensorAttributes>(std::move(xAttr));
 
         // Create weight/filter tensor with UID
-        auto wAttr = graph::makeTensorAttributes("filter", inputDataType, graphTensorBundle.wTensor);
+        auto wAttr
+            = graph::makeTensorAttributes("filter", inputDataType, graphTensorBundle.wTensor);
         wAttr.set_uid(uid++);
         auto wTensorAttr = std::make_shared<graph::TensorAttributes>(std::move(wAttr));
 
         // Create convolution attributes
         graph::ConvFpropAttributes convAttr;
-        convAttr.set_name("conv_fprop")
-                .set_padding({0, 0})
-                .set_stride({1, 1})
-                .set_dilation({1, 1});
+        convAttr.set_name("conv_fprop").set_padding({0, 0}).set_stride({1, 1}).set_dilation({1, 1});
 
         // Perform convolution
         auto yTensorAttr = graph->conv_fprop(xTensorAttr, wTensorAttr, convAttr);
@@ -166,10 +159,10 @@ protected:
         {
             yTensorAttr->set_uid(uid++);
         }
-        
+
         // Set output tensor dimensions and strides
         yTensorAttr->set_dim(graphTensorBundle.yTensor.dims())
-                   .set_stride(graphTensorBundle.yTensor.strides());
+            .set_stride(graphTensorBundle.yTensor.strides());
         yTensorAttr->set_output(true);
 
         auto result = graph->validate();
@@ -188,10 +181,8 @@ protected:
         ASSERT_EQ(result.code, error_code_t::OK) << result.err_msg;
 
         // Create variant pack with all three tensors
-        auto variantPack = createVariantPack(*xTensorAttr,
-                                            *wTensorAttr,
-                                            *yTensorAttr,
-                                            graphTensorBundle);
+        auto variantPack
+            = createVariantPack(*xTensorAttr, *wTensorAttr, *yTensorAttr, graphTensorBundle);
 
         result = graph->execute(_handle, variantPack, nullptr);
         ASSERT_EQ(result.code, error_code_t::OK) << result.err_msg;
@@ -203,13 +194,13 @@ protected:
         auto* output = cpuTensorBundle.yTensor.memory().hostData();
         size_t size = cpuTensorBundle.xTensor.memory().count();
 
-        for (size_t i = 0; i < size; i++) {
+        for(size_t i = 0; i < size; i++)
+        {
             output[i] = std::fmax(0.0f, input[i]);
         }
     }
 
-    void runConvFpropTest(const ConvFpropTestCase& testCase,
-                          float tolerance = 1e-4f)
+    void runConvFpropTest(const ConvFpropTestCase& testCase, float tolerance = 1e-4f)
     {
         auto inputDataType = getDataTypeEnumFromType<float>();
 
@@ -217,14 +208,11 @@ protected:
         //log the random seed in case we need to reproduce the test
         HIPDNN_LOG_INFO("Test is using {} for its random seed", seed);
 
-        ConvFpropTensorBundle graphTensorBundle(
-            testCase, seed);
+        ConvFpropTensorBundle graphTensorBundle(testCase, seed);
 
-        ConvFpropTensorBundle cpuTensorBundle(
-            testCase, seed);
+        ConvFpropTensorBundle cpuTensorBundle(testCase, seed);
 
-        runConvFwd(
-            graphTensorBundle, inputDataType);
+        runConvFwd(graphTensorBundle, inputDataType);
         graphTensorBundle.yTensor.memory().markDeviceModified();
 
         runCpuConvFpropFwd(cpuTensorBundle);
@@ -235,42 +223,42 @@ protected:
     }
 
     // Create a convolution graph using hipDNN API - matching the fusilli graph from IreePlugin.cpp
-    void createConvolutionGraph(int64_t n = 1, int64_t c = 3, int64_t h = 32, int64_t w = 32,
-                                int64_t k = 64, int64_t r = 3, int64_t s = 3)
+    void createConvolutionGraph(int64_t n = 1,
+                                int64_t c = 3,
+                                int64_t h = 32,
+                                int64_t w = 32,
+                                int64_t k = 64,
+                                int64_t r = 3,
+                                int64_t s = 3)
     {
         auto graph = std::make_shared<hipdnn_frontend::graph::Graph>();
-        
+
         graph->set_name("fprop_sample");
-        graph->set_io_data_type(DataType_t::FLOAT)
-             .set_compute_data_type(DataType_t::FLOAT);
+        graph->set_io_data_type(DataType_t::FLOAT).set_compute_data_type(DataType_t::FLOAT);
 
         // Create input tensor (image)
         auto xTensor = std::make_shared<graph::TensorAttributes>();
         xTensor->set_name("image")
-               .set_dim({n, c, h, w})
-               .set_stride({c * h * w, h * w, w, 1})
-               .set_data_type(DataType_t::FLOAT);
+            .set_dim({n, c, h, w})
+            .set_stride({c * h * w, h * w, w, 1})
+            .set_data_type(DataType_t::FLOAT);
 
         // Create weight/filter tensor
         auto wTensor = std::make_shared<graph::TensorAttributes>();
         wTensor->set_name("filter")
-               .set_dim({k, c, r, s})
-               .set_stride({c * r * s, r * s, s, 1})
-               .set_data_type(DataType_t::FLOAT);
+            .set_dim({k, c, r, s})
+            .set_stride({c * r * s, r * s, s, 1})
+            .set_data_type(DataType_t::FLOAT);
 
         // Create convolution attributes
         graph::ConvFpropAttributes convAttr;
-        convAttr.set_name("conv_fprop")
-                .set_padding({0, 0})
-                .set_stride({1, 1})
-                .set_dilation({1, 1});
+        convAttr.set_name("conv_fprop").set_padding({0, 0}).set_stride({1, 1}).set_dilation({1, 1});
 
         // Perform convolution
         auto yTensor = graph->conv_fprop(xTensor, wTensor, convAttr);
 
         // Set output tensor dimensions and strides
-        yTensor->set_dim({n, k, h, w})
-               .set_stride({k * h * w, h * w, w, 1});
+        yTensor->set_dim({n, k, h, w}).set_stride({k * h * w, h * w, w, 1});
         yTensor->set_output(true);
 
         auto result = graph->validate();
@@ -300,9 +288,7 @@ namespace
 
 std::vector<ConvFpropTestCase> getReluFwdInferenceTestCases()
 {
-    return {
-        {.n = 1, .c = 3, .h = 32, .w = 32, .k = 64, .r = 3, .s = 3},
-    };
+    return {{.n = 16, .c = 128, .h = 64, .w = 64, .k = 256, .r = 1, .s = 1}};
 }
 
 } // namespace

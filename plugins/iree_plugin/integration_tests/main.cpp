@@ -8,13 +8,13 @@ SPDX-License-Identifier: MIT
 #include <hipdnn_sdk/logging/Logger.hpp>
 #include <hipdnn_sdk/test_utilities/LoggingUtils.hpp>
 
-#define RELU_PLUGIN_TESTS "relu_integration_test"
+#define IREE_PLUGIN_TESTS "iree_integration_test"
 
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
 
-    hipdnn_sdk::test_utilities::initializeSpdlogDefaultLogger(RELU_PLUGIN_TESTS);
+    hipdnn_sdk::test_utilities::initializeSpdlogDefaultLogger(IREE_PLUGIN_TESTS);
 
     return RUN_ALL_TESTS();
 }

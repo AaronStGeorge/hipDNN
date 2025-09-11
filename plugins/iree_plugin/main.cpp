@@ -49,7 +49,7 @@ int main(int argc, char* argv[])
     int64_t s = 1;
 
     
-    FusilliHandle handle = FUSILLI_UNWRAP(FusilliHandle::create(Backend::CPU));
+    Handle handle = FUSILLI_UNWRAP(Handle::create(Backend::CPU));
     auto graph = std::make_shared<Graph>();
 
     graph->setName("fprop_sample");
